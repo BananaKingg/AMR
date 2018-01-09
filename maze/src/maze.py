@@ -2,6 +2,7 @@
 # import dependencies
 import rospy
 import time  # needed to sleep between every phase
+from numpy import isnan  # analyze laserdata
 from tf.transformations import euler_from_quaternion  # needed for conversion of position angles
 
 # import messages
@@ -30,9 +31,14 @@ class MazeSolver:
             self.speed_angular = .2
             self.msg_pose = Pose()
             self.msg_laser = LaserScan()
-            self.rate = rospy.Rate(1.5)  # set a publish rate of 2 Hz
+            self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
+
+            # various constants incoming
+            self.CHECK_STRAIGHT_LASER_DATA = 10
             # command parameters for publish_movement
-            self.CMD_HALT = 0
+            self.CMD_LINEAR = 1
+            self.CMD_ANGULAR = 2
+            self.SAVE_DISTANCE = 5
 
             rospy.logdebug("init complete, waiting for service call...")
 
@@ -46,7 +52,6 @@ class MazeSolver:
         :param request:
         :return:
         """
-        # TODO
         self.msg_laser = request
 
     def odom_callback(self, request):
@@ -56,11 +61,12 @@ class MazeSolver:
         :return:
         """
         # only saving the part of the Odometry message that is relevant for the project's objective:
-        # position & orientation
+        # position & orientation (both being part of msg_pose)
         self.msg_pose = request.pose.pose
 
     def move_robot(self, p_service_msg):
         """
+        TODO adjust copied comment
         Here goes all the logic. Move the turtlebot in a square.
         Command: Twist Message published to mobile_base/commands/velocity
         Verify movement/positioning: Read data from Odometry
@@ -71,14 +77,42 @@ class MazeSolver:
         try:
             rospy.loginfo("entered move_robot")
 
-            self.rate.sleep()  # wait a moment to get a more exact position
-
             # halt bot for a short moment before entering next phase, avoiding unexpected movement
-            time.sleep(2)
+            time.sleep(self.rate)
+
+            # starting phase: wall follower
+            # step 1: move till wall is reached
+
+            while True:
+                # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
+                compressed_msg = self.msg_laser[len(self.msg_laser / 2) - self.CHECK_STRAIGHT_LASER_DATA / 2:
+                                                len(self.msg_laser / 2) - self.CHECK_STRAIGHT_LASER_DATA / 2]
+                nan_count = len(filter(lambda x: isnan(x), compressed_msg))
+
+                if nan_count == self.CHECK_STRAIGHT_LASER_DATA:
+                    self.publish_movement(self.CMD_LINEAR)
+                    continue
+
+                # Filter out nan's in order to calc average distance
+                data = filter(lambda x: isnan(x) is False, compressed_msg)
+                avg = sum(data) / float(len(data))
+                if avg > self.SAVE_DISTANCE:
+                    self.publish_movement(self.CMD_LINEAR)
+                    continue
+
+                if avg < self.SAVE_DISTANCE:
+                    break
 
         except KeyboardInterrupt:
-            rospy.logwarn("received KeyboardInterrupt, shutting down square mover...")
+            rospy.logwarn("received KeyboardInterrupt, shutting down maze runner...")
             return False
+
+    def circle_detection(self):
+        """
+        TODO
+        :return:
+        """
+        pass
 
     def publish_movement(self, p_direction):
         """
@@ -87,9 +121,12 @@ class MazeSolver:
         :return:
         """
         command = Twist()
-        if True:
+        if p_direction == self.CMD_LINEAR:
             command.linear.x = self.speed_linear
             command.angular.z = 0  # ensure the bot is moving straight only
+        elif p_direction == self.CMD_ANGULAR:
+            command.linear.x = 0  # ensure the bot is moving angular only
+            command.angular.z = self.speed_angular
         else:
             # default: stop the bot
             command.linear.x = 0
@@ -104,4 +141,12 @@ if __name__ == "__main__":
     """
     rospy.loginfo("entered main")
     maze = MazeSolver()
+
+    # tmp class
+    class TmpSrvMsg:
+        def __init__(self):
+            self.goal = (10, 10)
+
+    tmp = TmpSrvMsg()
+    maze.move_robot(tmp)
 
