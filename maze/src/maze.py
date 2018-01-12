@@ -5,6 +5,9 @@ import time  # needed to sleep between every phase
 from numpy import isnan  # analyze laserdata
 from tf.transformations import euler_from_quaternion  # needed for conversion of position angles
 
+# import services
+from maze.srv import MazeSrvMsg, MazeSrvMsgResponse
+
 # import messages
 from geometry_msgs.msg import Twist, Pose  # command message to publish the velocity, know position part of Odom
 from nav_msgs.msg import Odometry  # reading the position of the robot
@@ -26,6 +29,9 @@ class MazeSolver:
             # initiate publisher
             self.pub_vel = rospy.Publisher('/mobile_base/commands/velocity', Twist, queue_size=10)
 
+            # rospy service
+            rospy.service('/maze_solver_service', MazeSrvMsg, self.service_callback)
+
             # declare member variables
             self.speed_linear = .3
             self.speed_angular = .2
@@ -45,6 +51,19 @@ class MazeSolver:
             rospy.spin()  # maintain the service open.
         except KeyboardInterrupt:
             print("Shutting down multi square mover...")
+
+    def service_callback(self, p_service_msg):
+        """
+        Callback of the service that starts the maze solver
+        :param p_service_msg: contains goal (TODO) and success (bool)
+        :return: MyServiceResponse() - sets the success (bool) variable
+        """
+        rospy.loginfo("entered service_callback")
+        rospy.logdebug("service callback message: '{}'".format(p_service_msg))
+
+        my_response = MazeSrvMsgResponse()
+        my_response.success = self.move_robot(p_service_msg)
+        return my_response
 
     def laser_callback(self, request):
         """
@@ -76,6 +95,8 @@ class MazeSolver:
         """
         try:
             rospy.loginfo("entered move_robot")
+
+            rospy.logdebug("received message: '{}'".format(p_service_msg))
 
             # halt bot for a short moment before entering next phase, avoiding unexpected movement
             time.sleep(self.rate)
@@ -141,12 +162,3 @@ if __name__ == "__main__":
     """
     rospy.loginfo("entered main")
     maze = MazeSolver()
-
-    # tmp class
-    class TmpSrvMsg:
-        def __init__(self):
-            self.goal = (10, 10)
-
-    tmp = TmpSrvMsg()
-    maze.move_robot(tmp)
-
