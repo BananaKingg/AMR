@@ -1,0 +1,4 @@
+<launch>
+  <node pkg="ll-162143_maze" type="maze_solver.py" name="maze_solver" output="screen">
+  </node>
+</launch>
