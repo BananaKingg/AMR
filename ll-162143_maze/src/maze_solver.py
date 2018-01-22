@@ -3,6 +3,8 @@
 import rospy
 import time  # needed to sleep between every phase
 from tf.transformations import euler_from_quaternion  # needed for conversion of position angles
+import numpy as np
+from math import atan2, pi
 
 # import messages
 from geometry_msgs.msg import Twist, Pose  # command message to publish the velocity, know position part of Odom
@@ -23,15 +25,15 @@ class MazeSolver:
         rospy.Subscriber('/laserscan', LaserScan, self.laser_callback)
 
         # publishers
-        self.vel_pub = rospy.Publisher('/mobile_base/commands/velocity', Twist, queue_size = 5)
+        self.vel_pub = rospy.Publisher('/mobile_base/commands/velocity', Twist, queue_size=5)
 
         # declare member variables
         self.speed_linear = .3
-        self.speed_angular = .2
+        self.speed_angular = .1
         self.msg_pose = Pose()
         self.msg_laser = LaserScan()
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
-        self.memory = [0][0]  # remember visited points and movement decision
+        self.memory = [0][0]  # remember visited points TODO and movement decision?
         self.goal = [44.3, 10]  # goal position desired to be reached # TODO read from publisher
 
         # various constants incoming
@@ -61,6 +63,14 @@ class MazeSolver:
         # position & orientation (both being part of msg_pose)
         self.msg_pose = request.pose.pose
 
+    def goal_callback(self, request):
+        """
+        TODO
+        :param request:
+        :return:
+        """
+        self.goal = request
+
     def start_runner(self):
         """
         TODO
@@ -77,21 +87,38 @@ class MazeSolver:
 
     def turn_to_goal(self):
         """
-        TODO
+        Turns the robot until it is facing towards the goal
         :return:
         """
-        origin = self.msg_pose  # save starting position
         # calculate starting position; convert quaternion to euler first
         orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
                         self.msg_pose.orientation.z, self.msg_pose.orientation.w]
         (roll, pitch, yaw) = euler_from_quaternion(orientations)
-        starting = yaw  # save starting angle
-        while True:
+
+        # calculate with array --> goal angle will be an array itself
+        # x = np.array([self.msg_pose.position.x, self.goal[0]])
+        # y = np.array([self.msg_pose.position.y, self.goal[1]])
+        goal_angle = np.arctan2(self.goal[1], self.goal[0])
+        print("DEBUG: curr pos '{}', \ngoal '{}', yaw '{}', goal_angle '{}'".format(self.msg_pose, self.goal, yaw,
+                                                                                    goal_angle))
+        while abs(goal_angle - yaw) > 0.05:
+            # print("diff: '{}'".format(abs(new_goal-yaw)))
             self.publish_movement(self.CMD_ANGULAR)
+
+            # calc current orientation
             orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
                             self.msg_pose.orientation.z, self.msg_pose.orientation.w]
             (roll, pitch, yaw) = euler_from_quaternion(orientations)
-            print("angle: starting '{}', current '{}'".format(starting, yaw))
+
+            # calc orientation to goal
+            goal_angle = np.arctan2(self.goal[1], self.goal[0])
+            yaw = round(yaw, 4)
+            print("desired: yaw ({}) - goal_angle ({}) = {}".format(yaw, goal_angle, round(abs(yaw - goal_angle), 4)))
+
+            self.rate.sleep()
+
+        # turning completed, halt robot
+        self.publish_movement(0)
 
     def publish_movement(self, p_direction):
         """
@@ -110,7 +137,7 @@ class MazeSolver:
             # default: stop the bot
             command.linear.x = 0
             command.angular.z = 0
-        self.pub_vel.publish(command)
+        self.vel_pub.publish(command)
 
 
 if __name__ == "__main__":
@@ -118,4 +145,4 @@ if __name__ == "__main__":
     Main, create instance and launch
     """
     maze_runner = MazeSolver()
-    maze_runner.startRunner()
+    maze_runner.start_runner()
