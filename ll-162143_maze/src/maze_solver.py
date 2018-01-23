@@ -104,11 +104,9 @@ class MazeSolver:
                     data = filter(lambda x: np.isnan(x) is False, compressed_msg)
                 else:
                     data = compressed_msg
-                ''' original'''
-                # data = filter(lambda x: np.isnan(x) is False, compressed_msg)
-                ''' end original'''
                 print("data: {}".format(data))
                 avg = sum(data) / float(len(data))
+                print("avg: {}".format(avg))
                 if avg > self.SAVE_DISTANCE:
                     self.publish_movement(self.CMD_LINEAR)
                     continue
