@@ -41,7 +41,7 @@ class MazeSolver:
         # command parameters for publish_movement
         self.CMD_LINEAR = 1
         self.CMD_ANGULAR = 2
-        self.SAVE_DISTANCE = 1
+        self.SAVE_DISTANCE = 1  # minimum distance to closest obstacle
 
         rospy.logdebug("init complete, waiting for service call...")
 
@@ -105,9 +105,11 @@ class MazeSolver:
                 else:
                     data = compressed_msg
                 print("data: {}".format(data))
-                avg = sum(data) / float(len(data))
-                print("avg: {}".format(avg))
-                if avg > self.SAVE_DISTANCE:
+                # avg = sum(data) / float(len(data))
+                # print("avg: {}".format(avg))
+                mini = min(data)
+                print("mini: {}".format(mini))
+                if mini > self.SAVE_DISTANCE:
                     self.publish_movement(self.CMD_LINEAR)
                     continue
 
