@@ -37,11 +37,11 @@ class MazeSolver:
         self.goal = [44.3, 10]  # goal position desired to be reached # TODO read from publisher
 
         # various constants incoming
-        self.CHECK_STRAIGHT_LASER_DATA = 10
+        self.CHECK_STRAIGHT_LASER_DATA = 10  # the number of datasets considered for driving decision
         # command parameters for publish_movement
         self.CMD_LINEAR = 1
         self.CMD_ANGULAR = 2
-        self.SAVE_DISTANCE = 5
+        self.SAVE_DISTANCE = 1
 
         rospy.logdebug("init complete, waiting for service call...")
 
@@ -79,9 +79,42 @@ class MazeSolver:
         rospy.loginfo("start")
 
         while not rospy.is_shutdown():
+            # orient towards goal position
             self.turn_to_goal()
-            # sleep to prevent flooding console
-            self.rate.sleep()
+
+            # if nothing is in the way, start driving
+            # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
+            while True:
+                # sleep to prevent flooding console
+                self.rate.sleep()
+
+                compressed_msg = self.msg_laser.ranges[len(self.msg_laser.ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
+                                                       len(self.msg_laser.ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
+                print("compressed_msg: '{}'".format(compressed_msg))
+                nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
+                print("nan_count = {}".format(nan_count))
+
+                # nothing in sight -> green light
+                if nan_count == self.CHECK_STRAIGHT_LASER_DATA:
+                    self.publish_movement(self.CMD_LINEAR)
+                    continue
+
+                # Filter out nan's in order to calc average distance
+                if nan_count > 0:
+                    data = filter(lambda x: np.isnan(x) is False, compressed_msg)
+                else:
+                    data = compressed_msg
+                ''' original'''
+                # data = filter(lambda x: np.isnan(x) is False, compressed_msg)
+                ''' end original'''
+                print("data: {}".format(data))
+                avg = sum(data) / float(len(data))
+                if avg > self.SAVE_DISTANCE:
+                    self.publish_movement(self.CMD_LINEAR)
+                    continue
+
+                # if avg < self.SAVE_DISTANCE:  # for every other situation: halt robot
+                break
 
         rospy.spin()
 
@@ -99,10 +132,8 @@ class MazeSolver:
         # x = np.array([self.msg_pose.position.x, self.goal[0]])
         # y = np.array([self.msg_pose.position.y, self.goal[1]])
         goal_angle = np.arctan2(self.goal[1], self.goal[0])
-        print("DEBUG: curr pos '{}', \ngoal '{}', yaw '{}', goal_angle '{}'".format(self.msg_pose, self.goal, yaw,
-                                                                                    goal_angle))
+
         while abs(goal_angle - yaw) > 0.05:
-            # print("diff: '{}'".format(abs(new_goal-yaw)))
             self.publish_movement(self.CMD_ANGULAR)
 
             # calc current orientation
@@ -112,8 +143,8 @@ class MazeSolver:
 
             # calc orientation to goal
             goal_angle = np.arctan2(self.goal[1], self.goal[0])
-            yaw = round(yaw, 4)
-            print("desired: yaw ({}) - goal_angle ({}) = {}".format(yaw, goal_angle, round(abs(yaw - goal_angle), 4)))
+            print("desired: yaw ({}) - goal_angle ({}) = {}".format(round(yaw, 4), round(goal_angle, 4),
+                                                                    round(abs(yaw - goal_angle), 4)))
 
             self.rate.sleep()
 
