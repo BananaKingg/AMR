@@ -10,6 +10,13 @@ from math import atan2, pi
 from geometry_msgs.msg import Twist, Pose  # command message to publish the velocity, know position part of Odom
 from nav_msgs.msg import Odometry  # reading the position of the robot
 from sensor_msgs.msg import LaserScan  # know what the bot is seeing
+from std_msgs.msg import Float64MultiArray  # listen to goal publisher
+
+
+class Point:
+    def __init__(self, p_x=0, p_y=0):
+        self.x = p_x
+        self.y = p_y
 
 
 class MazeSolver:
@@ -23,6 +30,7 @@ class MazeSolver:
         # subscribers
         rospy.Subscriber('/odom', Odometry, self.odom_callback)
         rospy.Subscriber('/laserscan', LaserScan, self.laser_callback)
+        rospy.Subscriber('/maze_goal_master', Float64MultiArray, self.goal_callback)
 
         # publishers
         self.vel_pub = rospy.Publisher('/mobile_base/commands/velocity', Twist, queue_size=5)
@@ -33,8 +41,9 @@ class MazeSolver:
         self.msg_pose = Pose()
         self.msg_laser = LaserScan()
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
-        self.memory = [0][0]  # remember visited points TODO and movement decision?
-        self.goal = [44.3, 10]  # goal position desired to be reached # TODO read from publisher
+        self.memory = set()  # remember visited points TODO and movement decision?
+        self.goal = Point()  # goal position desired to be reached
+        # self.goal = [44.3, 10]  # goal position desired to be reached # TODO read from publisher
 
         # various constants incoming
         self.CHECK_STRAIGHT_LASER_DATA = 10  # the number of datasets considered for driving decision
@@ -69,7 +78,8 @@ class MazeSolver:
         :param request:
         :return:
         """
-        self.goal = request
+        tmp_point = Point(request.data[0], request.data[1])
+        self.goal = tmp_point
 
     def start_runner(self):
         """
@@ -78,21 +88,31 @@ class MazeSolver:
         """
         rospy.loginfo("start")
 
+        '''
+        # TODO subscribe to goal and set it accordingly. Hot fix: hard coded
+        goal = Point(44.3, 10)
+        self.goal = goal
+        '''
+        rospy.logdebug("running with goal: '{}'".format(self.goal))
+
         while not rospy.is_shutdown():
+            self.remember_position()
+
             # orient towards goal position
             self.turn_to_goal()
 
-            # if nothing is in the way, start driving
-            # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
             while True:
                 # sleep to prevent flooding console
                 self.rate.sleep()
 
+                self.remember_position()
+
+                # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
                 compressed_msg = self.msg_laser.ranges[len(self.msg_laser.ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
                                                        len(self.msg_laser.ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
-                print("compressed_msg: '{}'".format(compressed_msg))
+                rospy.logdebug("compressed_msg: '{}'".format(compressed_msg))
                 nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
-                print("nan_count = {}".format(nan_count))
+                rospy.logdebug("nan_count = {}".format(nan_count))
 
                 # nothing in sight -> green light
                 if nan_count == self.CHECK_STRAIGHT_LASER_DATA:
@@ -104,16 +124,17 @@ class MazeSolver:
                     data = filter(lambda x: np.isnan(x) is False, compressed_msg)
                 else:
                     data = compressed_msg
-                print("data: {}".format(data))
+                rospy.logdebug("data: {}".format(data))
                 # avg = sum(data) / float(len(data))
                 # print("avg: {}".format(avg))
                 mini = min(data)
-                print("mini: {}".format(mini))
+                rospy.logdebug("mini: {}".format(mini))
                 if mini > self.SAVE_DISTANCE:
                     self.publish_movement(self.CMD_LINEAR)
                     continue
 
                 # if avg < self.SAVE_DISTANCE:  # for every other situation: halt robot
+                self.publish_movement(0)
                 break
 
         rospy.spin()
@@ -123,6 +144,8 @@ class MazeSolver:
         Turns the robot until it is facing towards the goal
         :return:
         """
+        rospy.loginfo("turn_to_goal")
+
         # calculate starting position; convert quaternion to euler first
         orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
                         self.msg_pose.orientation.z, self.msg_pose.orientation.w]
@@ -131,7 +154,7 @@ class MazeSolver:
         # calculate with array --> goal angle will be an array itself
         # x = np.array([self.msg_pose.position.x, self.goal[0]])
         # y = np.array([self.msg_pose.position.y, self.goal[1]])
-        goal_angle = np.arctan2(self.goal[1], self.goal[0])
+        goal_angle = np.arctan2(self.goal.y, self.goal.x)
 
         while abs(goal_angle - yaw) > 0.05:
             self.publish_movement(self.CMD_ANGULAR)
@@ -142,7 +165,7 @@ class MazeSolver:
             (roll, pitch, yaw) = euler_from_quaternion(orientations)
 
             # calc orientation to goal
-            goal_angle = np.arctan2(self.goal[1], self.goal[0])
+            goal_angle = np.arctan2(self.goal.y, self.goal.x)
             print("desired: yaw ({}) - goal_angle ({}) = {}".format(round(yaw, 4), round(goal_angle, 4),
                                                                     round(abs(yaw - goal_angle), 4)))
 
@@ -169,6 +192,28 @@ class MazeSolver:
             command.linear.x = 0
             command.angular.z = 0
         self.vel_pub.publish(command)
+
+    def remember_position(self):
+        """
+        write current position to list 'memory' and check if position has already been visited (circle detection)
+        :return:
+        """
+        rospy.loginfo("never forget a thing...")
+
+        # remember current position
+        tmp_pnt = Point(self.msg_pose.position.x, self.msg_pose.position.y)
+        self.memory.add(tmp_pnt)
+
+        for pnt in set(self.memory):
+            if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
+                self.overcome_obstacle()
+
+    def overcome_obstacle(self):
+        """
+        TODO
+        :return:
+        """
+        rospy.loginfo("challenge accepted!")
 
 
 if __name__ == "__main__":
