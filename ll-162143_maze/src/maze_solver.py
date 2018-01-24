@@ -90,11 +90,14 @@ class MazeSolver:
         :return:
         """
         rospy.loginfo("start")
-        rospy.logdebug("running with goal: '{}'".format(self.goal))
 
         while not rospy.is_shutdown():
             # phase 1: orient towards goal position
-            # TODO at the beginning, take some time listening to the goal publisher
+            # at the beginning, take some time listening to the goal publisher
+            tmp_point = Point()  # create (0,0)-Point and compare to goal
+            while self.goal.x == tmp_point.x and self.goal.y == tmp_point.y:
+                self.rate.sleep()
+                rospy.loginfo("waiting for goal publisher...")
             self.turn_to_goal()
 
             # phase 2: drive (if no obstacle)
