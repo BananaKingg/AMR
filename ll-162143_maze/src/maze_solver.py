@@ -4,7 +4,6 @@ import rospy
 import time  # needed to sleep between every phase
 from tf.transformations import euler_from_quaternion  # needed for conversion of position angles
 import numpy as np
-from math import atan2, pi
 
 # import messages
 from geometry_msgs.msg import Twist, Pose  # command message to publish the velocity, know position part of Odom
@@ -44,7 +43,8 @@ class MazeSolver:
         self.msg_pose = Pose()
         self.msg_laser = LaserScan()
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
-        self.memory = set()  # remember visited points TODO and movement decision?
+        # self.memory = set()  # remember visited points TODO and movement decision?
+        self.memory = {Point(100, 100)}  # remember visited points TODO and movement decision?
         self.goal = Point()  # goal position desired to be reached
         # self.goal = [44.3, 10]  # goal position desired to be reached # TODO read from publisher
 
@@ -96,7 +96,7 @@ class MazeSolver:
             # at the beginning, take some time listening to the goal publisher
             tmp_point = Point()  # create (0,0)-Point and compare to goal
             while self.goal.x == tmp_point.x and self.goal.y == tmp_point.y:
-                self.rate.sleep()
+                time.sleep(self.rate)
                 rospy.loginfo("waiting for goal publisher...")
             self.turn_to_goal()
 
@@ -136,7 +136,7 @@ class MazeSolver:
             print("desired: yaw ({}) - goal_angle ({}) = {}".format(round(yaw, 4), round(goal_angle, 4),
                                                                     round(abs(yaw - goal_angle), 4)))
 
-            self.rate.sleep()
+            time.sleep(self.rate)
 
         # turning completed, halt robot
         self.publish_movement(0)
@@ -148,7 +148,7 @@ class MazeSolver:
         """
         while True:
             # sleep to prevent flooding console
-            self.rate.sleep()
+            time.sleep(self.rate)
 
             # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
             compressed_msg = self.msg_laser.ranges[len(self.msg_laser.ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
@@ -169,8 +169,8 @@ class MazeSolver:
                 data = compressed_msg
             rospy.logdebug("data: {}".format(data))
 
-            print("num elements in data: {}".format(len(data)))
             mini = min(data)
+            print("min: {}".format(mini))
             rospy.logdebug("mini: {}".format(mini))
             if mini > self.SAVE_DISTANCE:
                 self.publish_movement(self.CMD_LINEAR)
@@ -205,18 +205,29 @@ class MazeSolver:
         """
         rospy.loginfo("never forget a thing...")
 
-        # remember current position
+        ''' DEBUG '''
+        print("Before adding:")
+        self.print_memory()
+        ''' DEBUG '''
+
         tmp_pnt = Point(self.msg_pose.position.x, self.msg_pose.position.y)
-        self.memory.add(tmp_pnt)
 
-        # print("memory: {}".format(self.memory))
-
-        point_cloud = []
+        duplicate = False
         for pnt in set(self.memory):
-            point_cloud.append(pnt)
-            # if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
+            # check if current point is already known
+            if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
+                duplicate = True
+                print("duplicate found!!!")
                 # self.overcome_obstacle()
-        print("all points: ".format(point_cloud))
+                continue
+        if not duplicate:
+            # remember current position
+            self.memory.add(tmp_pnt)
+
+        ''' DEBUG '''
+        print("...and after adding:")
+        self.print_memory()
+        ''' DEBUG '''
 
     def overcome_obstacle(self):
         """
@@ -224,6 +235,17 @@ class MazeSolver:
         :return:
         """
         rospy.loginfo("challenge accepted!")
+
+    def print_memory(self):
+        """
+        Helper function for a (at least half way) pretty printing of all visited points stored in memory
+        :return:
+        """
+        point_cloud = "All points (" + str(len(self.memory)) + "): {"
+        for pnt in set(self.memory):
+            point_cloud += "(" + str(round(pnt.x, 3)) + "," + str(round(pnt.y, 3)) + ")"
+        point_cloud += "}"
+        print(point_cloud)
 
 
 if __name__ == "__main__":
