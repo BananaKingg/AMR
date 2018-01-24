@@ -18,6 +18,9 @@ class Point:
         self.x = p_x
         self.y = p_y
 
+    def print_point(self):
+        print("{},{}".format(self.x, self.y))
+
 
 class MazeSolver:
     # initialise your node, publisher and subscriber as well as some member variables
@@ -83,59 +86,20 @@ class MazeSolver:
 
     def start_runner(self):
         """
-        TODO
+        "Main" function of the runner, coordinates the other functions
         :return:
         """
         rospy.loginfo("start")
-
-        '''
-        # TODO subscribe to goal and set it accordingly. Hot fix: hard coded
-        goal = Point(44.3, 10)
-        self.goal = goal
-        '''
         rospy.logdebug("running with goal: '{}'".format(self.goal))
 
         while not rospy.is_shutdown():
-            self.remember_position()
-
-            # orient towards goal position
+            # phase 1: orient towards goal position
+            # TODO at the beginning, take some time listening to the goal publisher
             self.turn_to_goal()
 
-            while True:
-                # sleep to prevent flooding console
-                self.rate.sleep()
-
-                self.remember_position()
-
-                # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
-                compressed_msg = self.msg_laser.ranges[len(self.msg_laser.ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
-                                                       len(self.msg_laser.ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
-                rospy.logdebug("compressed_msg: '{}'".format(compressed_msg))
-                nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
-                rospy.logdebug("nan_count = {}".format(nan_count))
-
-                # nothing in sight -> green light
-                if nan_count == self.CHECK_STRAIGHT_LASER_DATA:
-                    self.publish_movement(self.CMD_LINEAR)
-                    continue
-
-                # Filter out nan's in order to calc average distance
-                if nan_count > 0:
-                    data = filter(lambda x: np.isnan(x) is False, compressed_msg)
-                else:
-                    data = compressed_msg
-                rospy.logdebug("data: {}".format(data))
-                # avg = sum(data) / float(len(data))
-                # print("avg: {}".format(avg))
-                mini = min(data)
-                rospy.logdebug("mini: {}".format(mini))
-                if mini > self.SAVE_DISTANCE:
-                    self.publish_movement(self.CMD_LINEAR)
-                    continue
-
-                # if avg < self.SAVE_DISTANCE:  # for every other situation: halt robot
-                self.publish_movement(0)
-                break
+            # phase 2: drive (if no obstacle)
+            self.remember_position()
+            self.drive_forward()
 
         rospy.spin()
 
@@ -144,7 +108,7 @@ class MazeSolver:
         Turns the robot until it is facing towards the goal
         :return:
         """
-        rospy.loginfo("turn_to_goal")
+        rospy.loginfo("turn_to_goal ({},{})".format(self.goal.x, self.goal.y))
 
         # calculate starting position; convert quaternion to euler first
         orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
@@ -173,6 +137,44 @@ class MazeSolver:
 
         # turning completed, halt robot
         self.publish_movement(0)
+
+    def drive_forward(self):
+        """
+        Drive robot forward if no obstacle is in it's way
+        :return:
+        """
+        while True:
+            # sleep to prevent flooding console
+            self.rate.sleep()
+
+            # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
+            compressed_msg = self.msg_laser.ranges[len(self.msg_laser.ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
+                                                   len(self.msg_laser.ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
+            rospy.logdebug("compressed_msg: '{}'".format(compressed_msg))
+            nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
+            rospy.logdebug("nan_count = {}".format(nan_count))
+
+            # nothing in sight -> green light
+            if nan_count == self.CHECK_STRAIGHT_LASER_DATA:
+                self.publish_movement(self.CMD_LINEAR)
+                continue
+
+            # Filter out nan's in order to calc average distance
+            if nan_count > 0:
+                data = filter(lambda x: np.isnan(x) is False, compressed_msg)
+            else:
+                data = compressed_msg
+            rospy.logdebug("data: {}".format(data))
+
+            print("num elements in data: {}".format(len(data)))
+            mini = min(data)
+            rospy.logdebug("mini: {}".format(mini))
+            if mini > self.SAVE_DISTANCE:
+                self.publish_movement(self.CMD_LINEAR)
+                continue
+
+            # if avg < self.SAVE_DISTANCE:  # for every other situation: halt robot
+            self.publish_movement(0)
 
     def publish_movement(self, p_direction):
         """
@@ -204,9 +206,14 @@ class MazeSolver:
         tmp_pnt = Point(self.msg_pose.position.x, self.msg_pose.position.y)
         self.memory.add(tmp_pnt)
 
+        # print("memory: {}".format(self.memory))
+
+        point_cloud = []
         for pnt in set(self.memory):
-            if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
-                self.overcome_obstacle()
+            point_cloud.append(pnt)
+            # if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
+                # self.overcome_obstacle()
+        print("all points: ".format(point_cloud))
 
     def overcome_obstacle(self):
         """
