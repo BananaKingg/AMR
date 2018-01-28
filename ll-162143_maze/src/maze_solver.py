@@ -18,6 +18,9 @@ class Point:
         self.x = p_x
         self.y = p_y
 
+    def print_point(self):
+        print("{},{}".format(self.x, self.y))
+
 
 class MazeSolver:
     # initialise your node, publisher and subscriber as well as some member variables
@@ -25,7 +28,7 @@ class MazeSolver:
         # initiate node
         rospy.init_node('maze_solver')
 
-        self.rate = rospy.Rate(10)
+        self.rate = rospy.Rate(5)
 
         # subscribers
         rospy.Subscriber('/odom', Odometry, self.odom_callback)
@@ -43,7 +46,6 @@ class MazeSolver:
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
         self.memory = set()  # remember visited points TODO and movement decision?
         self.goal = Point()  # goal position desired to be reached
-        # self.goal = [44.3, 10]  # goal position desired to be reached # TODO read from publisher
 
         # various constants incoming
         self.CHECK_STRAIGHT_LASER_DATA = 10  # the number of datasets considered for driving decision
@@ -52,7 +54,7 @@ class MazeSolver:
         self.CMD_ANGULAR = 2
         self.SAVE_DISTANCE = 1  # minimum distance to closest obstacle
 
-        rospy.logdebug("init complete, waiting for service call...")
+        self.SLEEP_TIME = 2  # sleep duration (sec)
 
     def laser_callback(self, request):
         """
@@ -86,58 +88,81 @@ class MazeSolver:
         TODO
         :return:
         """
-        rospy.loginfo("start")
+        try:
+            rospy.loginfo("start")
 
-        '''
-        # TODO subscribe to goal and set it accordingly. Hot fix: hard coded
-        goal = Point(44.3, 10)
-        self.goal = goal
-        '''
-        rospy.logdebug("running with goal: '{}'".format(self.goal))
+            while not rospy.is_shutdown():
+                ''' phase 1: orient towards goal position '''
+                self.turn_to_goal()
 
-        while not rospy.is_shutdown():
-            self.remember_position()
-
-            # orient towards goal position
-            self.turn_to_goal()
-
-            while True:
                 # sleep to prevent flooding console
-                self.rate.sleep()
+                time.sleep(self.SLEEP_TIME)
 
-                self.remember_position()
+                ''' phase 2: drive till an obstacle appears '''
 
+                ''' experimental, comment whole block 
+                ########################################################################################################
+                
                 # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
-                compressed_msg = self.msg_laser.ranges[len(self.msg_laser.ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
-                                                       len(self.msg_laser.ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
-                rospy.logdebug("compressed_msg: '{}'".format(compressed_msg))
+                print("len laser data = {}".format(len(self.msg_laser.ranges)))
+                while len(self.msg_laser.ranges) == 0:  # if there is no data from laserscanner: wait till there is some
+                    rospy.loginfo("no data from laserscanner, waiting to receive some...")
+                    time.sleep(self.SLEEP_TIME)
+                ranges = self.msg_laser.ranges
+                compressed_msg = ranges[len(ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
+                                        len(ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
+                print("compressed_msg: '{}'".format(compressed_msg))
                 nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
-                rospy.logdebug("nan_count = {}".format(nan_count))
+                print("nan_count = {}".format(nan_count))
+                
+                ########################################################################################################
+                end of comment'''
+
+                '''
+                                ATTENTION      
+                Careful at the loops, laserdata is not updated
+                
+                '''
 
                 # nothing in sight -> green light
-                if nan_count == self.CHECK_STRAIGHT_LASER_DATA:
+                (compressed, nan_count, mini) = self.eval_laserdata()
+                while nan_count == self.CHECK_STRAIGHT_LASER_DATA:
+                    print("no obstacle close, let's go!")
                     self.publish_movement(self.CMD_LINEAR)
+                    (compressed, nan_count, mini) = self.eval_laserdata()
                     continue
-
+                ''' experimental, comment whole block 
+                ########################################################################################################
                 # Filter out nan's in order to calc average distance
                 if nan_count > 0:
                     data = filter(lambda x: np.isnan(x) is False, compressed_msg)
                 else:
                     data = compressed_msg
-                rospy.logdebug("data: {}".format(data))
+                print("data: {}".format(data))
                 # avg = sum(data) / float(len(data))
                 # print("avg: {}".format(avg))
                 mini = min(data)
-                rospy.logdebug("mini: {}".format(mini))
-                if mini > self.SAVE_DISTANCE:
+                print("mini: {}".format(mini))
+                
+                ########################################################################################################
+                end of comment'''
+
+                (compressed, nan_count, mini) = self.eval_laserdata()
+                while mini > self.SAVE_DISTANCE:
+                    print("no obstacle close (closest one is at '{}'), let's go!".format(round(mini, 3)))
                     self.publish_movement(self.CMD_LINEAR)
+                    (compressed, nan_count, mini) = self.eval_laserdata()
                     continue
 
-                # if avg < self.SAVE_DISTANCE:  # for every other situation: halt robot
+                # in every other situation: halt robot and remember position
                 self.publish_movement(0)
+                self.remember_position()  # TODO check if remembering position is correct here
                 break
 
-        rospy.spin()
+            rospy.spin()
+        except rospy.exceptions.ROSInterruptException:
+            rospy.logwarn("received ROSInterruptException, shutting down maze solver...")
+            return False
 
     def turn_to_goal(self):
         """
@@ -145,6 +170,13 @@ class MazeSolver:
         :return:
         """
         rospy.loginfo("turn_to_goal")
+
+        tmp_pnt = Point()
+        while abs(self.goal.x - tmp_pnt.x) < .1 and abs(self.goal.y - tmp_pnt.y) < .1:
+            print("waiting for goal publisher, current goal ({},{})".format(self.goal.x, self.goal.y))
+            time.sleep(self.SLEEP_TIME)
+
+        print("turning to goal: ({},{})".format(self.goal.x, self.goal.y))
 
         # calculate starting position; convert quaternion to euler first
         orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
@@ -169,10 +201,33 @@ class MazeSolver:
             print("desired: yaw ({}) - goal_angle ({}) = {}".format(round(yaw, 4), round(goal_angle, 4),
                                                                     round(abs(yaw - goal_angle), 4)))
 
-            self.rate.sleep()
-
         # turning completed, halt robot
         self.publish_movement(0)
+
+    def eval_laserdata(self):
+        """
+        TODO
+        :return:
+        """
+        ranges = self.msg_laser.ranges
+        print("len laser data = {}".format(len(ranges)))
+        while len(ranges) == 0:  # if there is no data from laserscanner: wait till there is some
+            rospy.loginfo("no data from laserscanner, waiting to receive some...")
+            time.sleep(self.SLEEP_TIME)
+        compressed_msg = ranges[len(ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
+                                len(ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
+        # print("compressed_msg: '{}'".format(compressed_msg))
+        nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
+        print("nan_count = {}".format(nan_count))
+        # Filter out nan's in order to calc average distance
+        if nan_count > 0:
+            compressed_msg = filter(lambda x: np.isnan(x) is False, compressed_msg)
+        # print("compressed msg: {}".format(compressed_msg))
+        # avg = sum(compressed_msg) / float(len(compressed_msg))
+        # print("avg: {}".format(avg))
+        mini = min(compressed_msg)
+        print("mini: {}".format(mini))
+        return compressed_msg, nan_count, mini
 
     def publish_movement(self, p_direction):
         """
@@ -192,6 +247,7 @@ class MazeSolver:
             command.linear.x = 0
             command.angular.z = 0
         self.vel_pub.publish(command)
+        self.rate.sleep()
 
     def remember_position(self):
         """
