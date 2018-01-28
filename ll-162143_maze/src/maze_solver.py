@@ -4,7 +4,6 @@ import rospy
 import time  # needed to sleep between every phase
 from tf.transformations import euler_from_quaternion  # needed for conversion of position angles
 import numpy as np
-from math import atan2, pi
 
 # import messages
 from geometry_msgs.msg import Twist, Pose  # command message to publish the velocity, know position part of Odom
@@ -44,7 +43,8 @@ class MazeSolver:
         self.msg_pose = Pose()
         self.msg_laser = LaserScan()
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
-        self.memory = set()  # remember visited points TODO and movement decision?
+        # self.memory = set()  # remember visited points TODO and movement decision?
+        self.memory = {Point(100, 100)}  # remember visited points TODO and movement decision?
         self.goal = Point()  # goal position desired to be reached
 
         # various constants incoming
@@ -85,7 +85,7 @@ class MazeSolver:
 
     def start_runner(self):
         """
-        TODO
+        "Main" function of the runner, coordinates the other functions
         :return:
         """
         try:
@@ -100,9 +100,9 @@ class MazeSolver:
 
                 ''' phase 2: drive till an obstacle appears '''
 
-                ''' experimental, comment whole block 
+                ''' experimental, comment whole block
                 ########################################################################################################
-                
+
                 # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
                 print("len laser data = {}".format(len(self.msg_laser.ranges)))
                 while len(self.msg_laser.ranges) == 0:  # if there is no data from laserscanner: wait till there is some
@@ -114,14 +114,14 @@ class MazeSolver:
                 print("compressed_msg: '{}'".format(compressed_msg))
                 nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
                 print("nan_count = {}".format(nan_count))
-                
+
                 ########################################################################################################
                 end of comment'''
 
                 '''
-                                ATTENTION      
+                                ATTENTION
                 Careful at the loops, laserdata is not updated
-                
+
                 '''
 
                 # nothing in sight -> green light
@@ -131,7 +131,7 @@ class MazeSolver:
                     self.publish_movement(self.CMD_LINEAR)
                     (compressed, nan_count, mini) = self.eval_laserdata()
                     continue
-                ''' experimental, comment whole block 
+                ''' experimental, comment whole block
                 ########################################################################################################
                 # Filter out nan's in order to calc average distance
                 if nan_count > 0:
@@ -143,7 +143,7 @@ class MazeSolver:
                 # print("avg: {}".format(avg))
                 mini = min(data)
                 print("mini: {}".format(mini))
-                
+
                 ########################################################################################################
                 end of comment'''
 
@@ -169,11 +169,11 @@ class MazeSolver:
         Turns the robot until it is facing towards the goal
         :return:
         """
-        rospy.loginfo("turn_to_goal")
+        rospy.loginfo("turn_to_goal ({},{})".format(self.goal.x, self.goal.y))
 
         tmp_pnt = Point()
-        while abs(self.goal.x - tmp_pnt.x) < .1 and abs(self.goal.y - tmp_pnt.y) < .1:
-            print("waiting for goal publisher, current goal ({},{})".format(self.goal.x, self.goal.y))
+        while abs(self.goal.x - tmp_pnt.x) < .01 and abs(self.goal.y - tmp_pnt.y) < .01:
+            rospy.loginfo("waiting for goal publisher, current goal ({},{})".format(self.goal.x, self.goal.y))
             time.sleep(self.SLEEP_TIME)
 
         print("turning to goal: ({},{})".format(self.goal.x, self.goal.y))
@@ -256,13 +256,29 @@ class MazeSolver:
         """
         rospy.loginfo("never forget a thing...")
 
-        # remember current position
-        tmp_pnt = Point(self.msg_pose.position.x, self.msg_pose.position.y)
-        self.memory.add(tmp_pnt)
+        ''' DEBUG '''
+        print("Before adding:")
+        self.print_memory()
+        ''' DEBUG '''
 
+        tmp_pnt = Point(self.msg_pose.position.x, self.msg_pose.position.y)
+
+        duplicate = False
         for pnt in set(self.memory):
+            # check if current point is already known
             if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
-                self.overcome_obstacle()
+                duplicate = True
+                print("duplicate found!!!")
+                # self.overcome_obstacle()
+                continue
+        if not duplicate:
+            # remember current position
+            self.memory.add(tmp_pnt)
+
+        ''' DEBUG '''
+        print("...and after adding:")
+        self.print_memory()
+        ''' DEBUG '''
 
     def overcome_obstacle(self):
         """
@@ -270,6 +286,17 @@ class MazeSolver:
         :return:
         """
         rospy.loginfo("challenge accepted!")
+
+    def print_memory(self):
+        """
+        Helper function for a (at least half way) pretty printing of all visited points stored in memory
+        :return:
+        """
+        point_cloud = "All points (" + str(len(self.memory)) + "): {"
+        for pnt in set(self.memory):
+            point_cloud += "(" + str(round(pnt.x, 3)) + "," + str(round(pnt.y, 3)) + ")"
+        point_cloud += "}"
+        print(point_cloud)
 
 
 if __name__ == "__main__":
