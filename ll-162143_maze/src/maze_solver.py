@@ -5,6 +5,9 @@ import time  # needed to sleep between every phase
 from tf.transformations import euler_from_quaternion  # needed for conversion of position angles
 import numpy as np
 
+# import external files
+import PID as pid
+
 # import messages
 from geometry_msgs.msg import Twist, Pose  # command message to publish the velocity, know position part of Odom
 from nav_msgs.msg import Odometry  # reading the position of the robot
@@ -19,6 +22,9 @@ class Point:
 
     def print_point(self):
         print("{},{}".format(self.x, self.y))
+
+    def equals_point(self, p_point):
+        return True if self.x == p_point.x and self.y == p_point.y else False
 
 
 class MazeSolver:
@@ -39,7 +45,7 @@ class MazeSolver:
 
         # declare member variables
         self.speed_linear = .3
-        self.speed_angular = .1
+        self.speed_angular = .03
         self.msg_pose = Pose()
         self.msg_laser = LaserScan()
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
@@ -54,7 +60,7 @@ class MazeSolver:
         self.CMD_ANGULAR = 2
         self.SAVE_DISTANCE = 1  # minimum distance to closest obstacle
 
-        self.SLEEP_TIME = 2  # sleep duration (sec)
+        self.SLEEP_TIME = 1  # sleep duration (sec)
 
     def laser_callback(self, request):
         """
@@ -95,69 +101,30 @@ class MazeSolver:
                 ''' phase 1: orient towards goal position '''
                 self.turn_to_goal()
 
-                # sleep to prevent flooding console
+                # sleep between phases
                 time.sleep(self.SLEEP_TIME)
 
                 ''' phase 2: drive till an obstacle appears '''
-
-                ''' experimental, comment whole block
-                ########################################################################################################
-
-                # at this point check only number of CHECK_STRAIGHT_LASER_DATA elements from msg
-                print("len laser data = {}".format(len(self.msg_laser.ranges)))
-                while len(self.msg_laser.ranges) == 0:  # if there is no data from laserscanner: wait till there is some
-                    rospy.loginfo("no data from laserscanner, waiting to receive some...")
-                    time.sleep(self.SLEEP_TIME)
-                ranges = self.msg_laser.ranges
-                compressed_msg = ranges[len(ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
-                                        len(ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
-                print("compressed_msg: '{}'".format(compressed_msg))
-                nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
-                print("nan_count = {}".format(nan_count))
-
-                ########################################################################################################
-                end of comment'''
-
-                '''
-                                ATTENTION
-                Careful at the loops, laserdata is not updated
-
-                '''
-
                 # nothing in sight -> green light
-                (compressed, nan_count, mini) = self.eval_laserdata()
+                (compressed, nan_count, min_val) = self.eval_laserdata()
                 while nan_count == self.CHECK_STRAIGHT_LASER_DATA:
                     print("no obstacle close, let's go!")
                     self.publish_movement(self.CMD_LINEAR)
-                    (compressed, nan_count, mini) = self.eval_laserdata()
-                    continue
-                ''' experimental, comment whole block
-                ########################################################################################################
-                # Filter out nan's in order to calc average distance
-                if nan_count > 0:
-                    data = filter(lambda x: np.isnan(x) is False, compressed_msg)
-                else:
-                    data = compressed_msg
-                print("data: {}".format(data))
-                # avg = sum(data) / float(len(data))
-                # print("avg: {}".format(avg))
-                mini = min(data)
-                print("mini: {}".format(mini))
+                    (compressed, nan_count, min_val) = self.eval_laserdata()
 
-                ########################################################################################################
-                end of comment'''
-
-                (compressed, nan_count, mini) = self.eval_laserdata()
-                while mini > self.SAVE_DISTANCE:
-                    print("no obstacle close (closest one is at '{}'), let's go!".format(round(mini, 3)))
+                (compressed, nan_count, min_val) = self.eval_laserdata()
+                while min_val > self.SAVE_DISTANCE:
+                    print("no obstacle close (closest one is at '{}'), let's go!".format(round(min_val, 3)))
                     self.publish_movement(self.CMD_LINEAR)
-                    (compressed, nan_count, mini) = self.eval_laserdata()
-                    continue
+                    (compressed, nan_count, min_val) = self.eval_laserdata()
 
                 # in every other situation: halt robot and remember position
                 self.publish_movement(0)
                 self.remember_position()  # TODO check if remembering position is correct here
-                break
+
+                ''' phase 3: overcome obstacle '''
+                # turning and driving didn't lead to success -> we have an obstacle here
+                self.overcome_obstacle()
 
             rospy.spin()
         except rospy.exceptions.ROSInterruptException:
@@ -172,6 +139,12 @@ class MazeSolver:
         rospy.loginfo("turn_to_goal ({},{})".format(self.goal.x, self.goal.y))
 
         tmp_pnt = Point()
+        '''
+        ##### Approach for orienting towards a different goal than the one received from the goal subscriber
+        add to fct definition: (self, goal=Point())
+        if goal.equals_point(tmp_pnt):
+            pass
+        '''
         while abs(self.goal.x - tmp_pnt.x) < .01 and abs(self.goal.y - tmp_pnt.y) < .01:
             rospy.loginfo("waiting for goal publisher, current goal ({},{})".format(self.goal.x, self.goal.y))
             time.sleep(self.SLEEP_TIME)
@@ -188,7 +161,7 @@ class MazeSolver:
         # y = np.array([self.msg_pose.position.y, self.goal[1]])
         goal_angle = np.arctan2(self.goal.y, self.goal.x)
 
-        while abs(goal_angle - yaw) > 0.05:
+        while abs(goal_angle - yaw) > 0.01:
             self.publish_movement(self.CMD_ANGULAR)
 
             # calc current orientation
@@ -225,9 +198,9 @@ class MazeSolver:
         # print("compressed msg: {}".format(compressed_msg))
         # avg = sum(compressed_msg) / float(len(compressed_msg))
         # print("avg: {}".format(avg))
-        mini = min(compressed_msg)
-        print("mini: {}".format(mini))
-        return compressed_msg, nan_count, mini
+        min_val = min(x for x in compressed_msg if x != 0.0)
+        print("min_val: {}".format(min_val))
+        return compressed_msg, nan_count, min_val
 
     def publish_movement(self, p_direction):
         """
@@ -266,10 +239,10 @@ class MazeSolver:
         duplicate = False
         for pnt in set(self.memory):
             # check if current point is already known
-            if abs(pnt.x - tmp_pnt.x) < 1 and abs(pnt.y - tmp_pnt.y) < 1:
+            if abs(pnt.x - tmp_pnt.x) < .5 and abs(pnt.y - tmp_pnt.y) < .5:
                 duplicate = True
                 print("duplicate found!!!")
-                # self.overcome_obstacle()
+                # self.circle_detection_reaction()
                 continue
         if not duplicate:
             # remember current position
@@ -286,6 +259,28 @@ class MazeSolver:
         :return:
         """
         rospy.loginfo("challenge accepted!")
+        ranges = self.msg_laser.ranges
+        # Approach: check laser data starting from the center step-by-step till a jump in distances appears.
+        # That position means there is some sort of edge, most likely the end of the obstacle.
+        # Orient and drive to that position
+        for x in range(int(len(ranges) / 2)):
+            diff_a = ranges[len(ranges) / 2 - x] - ranges[len(ranges) / 2 - x - 1]
+            diff_b = ranges[len(ranges) / 2 + x] - ranges[len(ranges) / 2 + x + 1]
+            print("a = {}; b = {}".format(diff_a, diff_b))
+            if abs(diff_a) or abs(diff_b) > 1:
+                target_difference = diff_a if abs(diff_a) > abs(diff_b) else diff_b
+                target_index = ranges.index(target_difference)
+                print("target_index = {}".format(target_index))
+
+                # points start at -90 degree, therefore we start with negative values...
+                if target_index == len(ranges) / 2:
+                    angle = 0
+                # ... and switch to positive after half of the points are processed
+                elif target_index > len(ranges) / 2:
+                    angle = self.msg_laser.angle_max - target_index * self.msg_laser.angle_increment
+                else:
+                    angle = self.msg_laser.angle_min + target_index * self.msg_laser.angle_increment
+                break
 
     def print_memory(self):
         """
