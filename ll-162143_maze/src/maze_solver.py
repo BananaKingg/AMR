@@ -47,8 +47,7 @@ class MazeSolver:
         self.msg_pose = Pose()
         self.msg_laser = LaserScan()
         self.rate = rospy.Rate(1.5)  # set a publish rate of 1.5 Hz
-        # self.memory = set()  # remember visited points TODO and movement decision?
-        self.memory = {Point(100, 100)}  # remember visited points TODO and movement decision?
+        self.memory = {Point(100, 100)}  # remember visited points 
         self.goal = Point()  # goal position desired to be reached
 
         # various constants incoming
@@ -120,7 +119,7 @@ class MazeSolver:
                 # in every other situation: halt robot and remember position
                 self.publish_movement(0)
                 if driven:
-                    self.remember_position()  # TODO check if remembering position is correct here
+                    self.remember_position()
 
                 ''' phase 3: overcome obstacle '''
                 # turning and driving didn't lead to success -> we have an obstacle here
@@ -158,7 +157,7 @@ class MazeSolver:
         goal_angle = np.arctan2(goal.y, goal.x)
 
         # keep turning until the desired angle is reached
-        while abs(goal_angle - yaw) > 0.05:
+        while abs(goal_angle - yaw) > 0.06:  # 0.05
             self.publish_movement(self.CMD_ANGULAR_LEFT)
 
             # calc current orientation
@@ -192,7 +191,7 @@ class MazeSolver:
         while len(ranges) == 0:  # if there is no data from laserscanner: wait till there is some
             rospy.loginfo("no data from laserscanner, waiting to receive some...")
             time.sleep(self.SLEEP_TIME)
-        compressed_msg_total = ranges[::12]  # use 40 instead of 360 scan results to gain overview  TODO necessary?
+        compressed_msg_total = ranges[::12]  # use 40 instead of 360 scan results to gain overview
         compressed_msg_front = ranges[len(ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
                                       len(ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
 
@@ -229,11 +228,6 @@ class MazeSolver:
         """
         rospy.loginfo("never forget a thing...")
 
-        ''' DEBUG '''
-        print("Before adding:")
-        self.print_memory()
-        ''' DEBUG '''
-
         tmp_pnt = Point(self.msg_pose.position.x, self.msg_pose.position.y)
 
         duplicate = False
@@ -241,17 +235,11 @@ class MazeSolver:
             # check if current point is already known
             if abs(pnt.x - tmp_pnt.x) < .3 and abs(pnt.y - tmp_pnt.y) < .3:
                 duplicate = True
-                print("\n########## duplicate found!!! ##########\n")
                 self.overcome_obstacle_with_circle()
                 continue
         if not duplicate:
             # remember current position
             self.memory.add(tmp_pnt)
-
-        ''' DEBUG '''
-        print("...and after adding:")
-        self.print_memory()
-        ''' DEBUG '''
 
     def overcome_obstacle(self):
         """
