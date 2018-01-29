@@ -55,8 +55,10 @@ class MazeSolver:
         self.CHECK_STRAIGHT_LASER_DATA = 10  # the number of datasets considered for driving decision
         # command parameters for publish_movement
         self.CMD_LINEAR = 1
-        self.CMD_ANGULAR = 2
-        self.SAVE_DISTANCE = .5  # minimum distance to closest obstacle
+        self.CMD_ANGULAR_LEFT = 2
+        self.CMD_ANGULAR_RIGHT = 3
+        self.SAVE_DISTANCE_TOTAL = .2  # minimum distance to closest obstacle (overall)
+        self.SAVE_DISTANCE_FRONT = 1.5  # minimum distance to closest obstacle (at front)
 
         self.SLEEP_TIME = 1  # sleep duration (sec)
 
@@ -104,23 +106,21 @@ class MazeSolver:
 
                 ''' phase 2: drive till an obstacle appears '''
                 # nothing in sight -> green light
-                (compressed, nan_count, min_val) = self.eval_laserdata()
-                while nan_count == self.CHECK_STRAIGHT_LASER_DATA:
-                    print("no obstacle close, let's go!")
-                    self.publish_movement(self.CMD_LINEAR)
-                    (compressed, nan_count, min_val) = self.eval_laserdata()
-
-                (compressed, nan_count, min_val) = self.eval_laserdata()
-                while min_val > self.SAVE_DISTANCE:
-                    print("no obstacle close (closest one is at '{}'), let's go!".format(round(min_val, 3)))
+                (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+                driven = False
+                while min_val_total > self.SAVE_DISTANCE_TOTAL and min_val_front > self.SAVE_DISTANCE_FRONT:
+                    print("no obstacle close (closest total one is at '{}', front '{}'), let's go!".format(
+                        round(min_val_total, 3), round(min_val_front, 3)))
                     print("current position ({},{})".format(round(self.msg_pose.position.x, 4),
                                                             round(self.msg_pose.position.y, 4)))
                     self.publish_movement(self.CMD_LINEAR)
-                    (compressed, nan_count, min_val) = self.eval_laserdata()
+                    (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+                    driven = True
 
                 # in every other situation: halt robot and remember position
                 self.publish_movement(0)
-                self.remember_position()  # TODO check if remembering position is correct here
+                if driven:
+                    self.remember_position()  # TODO check if remembering position is correct here
 
                 ''' phase 3: overcome obstacle '''
                 # turning and driving didn't lead to success -> we have an obstacle here
@@ -142,7 +142,6 @@ class MazeSolver:
         tmp_pnt = Point()
         # no point has been passed to function, use goal from publisher
         if p_goal.equals_point(tmp_pnt):
-            print("True - same point, turning to publisher")
             while self.goal.equals_point(tmp_pnt):
                 # abs(self.goal.x - tmp_pnt.x) < .01 and abs(self.goal.y - tmp_pnt.y) < .01:
                 rospy.loginfo("waiting for goal publisher, current goal ({},{})".format(self.goal.x, self.goal.y))
@@ -150,30 +149,20 @@ class MazeSolver:
             goal = self.goal
         # custom goal has been passed via parameter
         else:
-            print("False - different point, taking that dude")
             goal = p_goal
 
         rospy.loginfo("turn_to_goal: ({},{})".format(round(goal.x, 3), round(goal.y, 3)))
 
         # calculate starting position; convert quaternion to euler first
-        orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
-                        self.msg_pose.orientation.z, self.msg_pose.orientation.w]
-        (roll, pitch, yaw) = euler_from_quaternion(orientations)
-
-        # calculate with array --> goal angle will be an array itself
-        # x = np.array([self.msg_pose.position.x, self.goal[0]])
-        # y = np.array([self.msg_pose.position.y, self.goal[1]])
+        yaw = self.get_orientation()
         goal_angle = np.arctan2(goal.y, goal.x)
 
         # keep turning until the desired angle is reached
         while abs(goal_angle - yaw) > 0.05:
-            self.publish_movement(self.CMD_ANGULAR)
+            self.publish_movement(self.CMD_ANGULAR_LEFT)
 
             # calc current orientation
-            orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
-                            self.msg_pose.orientation.z, self.msg_pose.orientation.w]
-            (roll, pitch, yaw) = euler_from_quaternion(orientations)
-
+            yaw = self.get_orientation()
             # calc orientation to goal
             goal_angle = np.arctan2(goal.y, goal.x)
             print("desired: yaw ({}) - goal_angle ({}) = {}".format(round(yaw, 4), round(goal_angle, 4),
@@ -182,31 +171,36 @@ class MazeSolver:
         # turning completed, halt robot
         self.publish_movement(0)
 
+    def get_orientation(self):
+        """
+        TODO
+        :return:
+        """
+        # calc current orientation
+        orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
+                        self.msg_pose.orientation.z, self.msg_pose.orientation.w]
+        (roll, pitch, yaw) = euler_from_quaternion(orientations)
+        return yaw
+
     def eval_laserdata(self):
         """
         TODO
         :return:
         """
         ranges = self.msg_laser.ranges
+        # self.SAVE_DISTANCE_FRONT = self.SAVE_DISTANCE_TOTAL
         while len(ranges) == 0:  # if there is no data from laserscanner: wait till there is some
             rospy.loginfo("no data from laserscanner, waiting to receive some...")
             time.sleep(self.SLEEP_TIME)
-        '''
-        compressed_msg = ranges[len(ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
-                                len(ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
-        '''
-        compressed_msg = ranges[::12]  # use 40 instead of 360 scan results to gain overview  TODO necessary?
-        # print("compressed_msg: '{}'".format(compressed_msg))
-        nan_count = len(filter(lambda x: np.isnan(x), compressed_msg))
-        # Filter out nan's in order to calc average distance
-        if nan_count > 0:
-            compressed_msg = filter(lambda x: np.isnan(x) is False, compressed_msg)
-        # print("compressed msg: {}".format(compressed_msg))
-        # avg = sum(compressed_msg) / float(len(compressed_msg))
-        # print("avg: {}".format(avg))
-        min_val = min(x for x in compressed_msg if x != 0.0)
-        print("len laser data = {}; nan_count = {}; min_val = {}".format(len(ranges), nan_count, round(min_val, 4)))
-        return compressed_msg, nan_count, min_val
+        compressed_msg_total = ranges[::12]  # use 40 instead of 360 scan results to gain overview  TODO necessary?
+        compressed_msg_front = ranges[len(ranges) / 2 - self.CHECK_STRAIGHT_LASER_DATA / 2:
+                                      len(ranges) / 2 + self.CHECK_STRAIGHT_LASER_DATA / 2]
+
+        min_val_total = min(x for x in compressed_msg_total if x != 0.0)
+        min_val_front = min(x for x in compressed_msg_front if x != 0.0)
+        print("len laser data = {}; min_val_total = {}; min_val_front = {}".format(len(ranges),
+                    round(min_val_total, 4), round(min_val_front, 4)))
+        return compressed_msg_total, compressed_msg_front, min_val_total, min_val_front
 
     def publish_movement(self, p_direction):
         """
@@ -218,9 +212,9 @@ class MazeSolver:
         if p_direction == self.CMD_LINEAR:
             command.linear.x = self.speed_linear
             command.angular.z = 0  # ensure the bot is moving straight only
-        elif p_direction == self.CMD_ANGULAR:
+        elif p_direction == self.CMD_ANGULAR_LEFT or p_direction == self.CMD_ANGULAR_RIGHT:
             command.linear.x = 0  # ensure the bot is moving angular only
-            command.angular.z = self.speed_angular
+            command.angular.z = self.speed_angular if p_direction == self.CMD_ANGULAR_LEFT else -self.speed_angular
         else:
             # default: stop the bot
             command.linear.x = 0
@@ -245,10 +239,10 @@ class MazeSolver:
         duplicate = False
         for pnt in set(self.memory):
             # check if current point is already known
-            if abs(pnt.x - tmp_pnt.x) < .5 and abs(pnt.y - tmp_pnt.y) < .5:
+            if abs(pnt.x - tmp_pnt.x) < .3 and abs(pnt.y - tmp_pnt.y) < .3:
                 duplicate = True
                 print("\n########## duplicate found!!! ##########\n")
-                # self.circle_detection_reaction()
+                self.overcome_obstacle_with_circle()
                 continue
         if not duplicate:
             # remember current position
@@ -266,61 +260,81 @@ class MazeSolver:
         """
         rospy.loginfo("overcome obstacle")
         ranges = self.msg_laser.ranges
-        # Approach: check laser data starting from the center step-by-step till a jump in distances appears.
-        # That position means there is some sort of edge, most likely the end of the obstacle.
-        # Orient and drive to that position
-        # for x in range(1, int(len(ranges) / 2)):
         for x in range(len(ranges) - 1):
             diff = abs(ranges[x] - ranges[x + 1])
-            # diff = abs(ranges[len(ranges) / 2 + x] - ranges[len(ranges) / 2 + x - 1])
-            # print("diff: {} - {} = {}".format(round(ranges[x], 4), round(ranges[x + 1], 4), round(diff, 4)))
-            # diff_b = abs(ranges[len(ranges) / 2 + x] - ranges[len(ranges) / 2 + x + 1])
-            # print("a = {}; b = {}".format(diff_a, diff_b))
-            # if abs(diff_a) or abs(diff_b) > 1:
             if diff > .1:
-                # target_difference = diff_a if abs(diff_a) > abs(diff_b) else diff_b
-                # target_index = ranges.index(ranges[len(ranges) / 2 - x])
                 print("val(index) = {}".format(ranges[x]))
                 print("val(index + 1) = {}".format(ranges[x + 1]))
                 print("val(index - 1) = {}".format(ranges[x - 1]))
                 distance = ranges[x + 1]
-                '''
-                print("check found index: val(index)={}; val(ind+1)={}; val(ind-1)={}".format(ranges[target_index]),
-                      ranges[target_index+1], ranges(target_index-1))
-                '''
+
                 # calc current orientation
-                orientations = [self.msg_pose.orientation.x, self.msg_pose.orientation.y,
-                                self.msg_pose.orientation.z, self.msg_pose.orientation.w]
-                (roll, pitch, yaw) = euler_from_quaternion(orientations)
+                yaw = self.get_orientation()
 
                 # use some maths to determine the coordinates of the destination point: we have a straight triangle
                 # with the distance from the current position to the destination as hypotenuse (c = distance)
                 a = sin(yaw) * distance
                 b = cos(yaw) * distance
 
-                target = Point(a, b)
+                target = Point(self.msg_pose.position.x + a, self.msg_pose.position.y + b)
                 print("calculated new target at ({},{})".format(round(target.x, 3), round(target.y, 3)))
                 self.turn_to_goal(target)
 
                 ''' phase 2: drive till an obstacle appears '''
                 # nothing in sight -> green light
-                (compressed, nan_count, min_val) = self.eval_laserdata()
-                while nan_count == self.CHECK_STRAIGHT_LASER_DATA:
-                    print("no obstacle close, let's go!")
-                    self.publish_movement(self.CMD_LINEAR)
-                    (compressed, nan_count, min_val) = self.eval_laserdata()
-
-                (compressed, nan_count, min_val) = self.eval_laserdata()
-                while min_val > self.SAVE_DISTANCE:
-                    print("no obstacle close (closest one is at '{}'), let's go!".format(round(min_val, 3)))
+                (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+                driven = False
+                while min_val_total > self.SAVE_DISTANCE_TOTAL and min_val_front > (self.SAVE_DISTANCE_FRONT - .6):  # .5
+                    print("no obstacle close (closest total one is at '{}', front '{}'), let's go!".format(
+                        round(min_val_total, 3), round(min_val_front, 3)))
                     print("current position ({},{})".format(round(self.msg_pose.position.x, 4),
                                                             round(self.msg_pose.position.y, 4)))
                     self.publish_movement(self.CMD_LINEAR)
-                    (compressed, nan_count, min_val) = self.eval_laserdata()
+                    (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+                    driven = True
 
                 # in every other situation: halt robot and remember position
                 self.publish_movement(0)
-                self.remember_position()  # TODO check if remembering position is correct here
+                if driven:
+                    self.remember_position()  # TODO check if remembering position is correct here
+
+    def overcome_obstacle_with_circle(self):
+        """
+        TODO
+        :return:
+        """
+        # orient to goal
+        self.turn_to_goal()
+        sum_angles_turned = 0
+
+        while sum_angles_turned < 360:
+            yaw1 = self.get_orientation()
+
+            self.publish_movement(self.CMD_ANGULAR_RIGHT)
+
+            # calc current orientation
+            yaw2 = self.get_orientation()
+            sum_angles_turned += (yaw2 - yaw1)
+
+            # invert condition for driving: turn until driving is allowed again
+            (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+            while min_val_total < self.SAVE_DISTANCE_TOTAL and min_val_front < (self.SAVE_DISTANCE_FRONT - .5):
+                print("turning till driving")
+                print("no obstacle close (closest total one is at '{}', front '{}'), let's go!".format(
+                    round(min_val_total, 3), round(min_val_front, 3)))
+                self.publish_movement(self.CMD_ANGULAR_RIGHT)
+                (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+
+            # now that condition for driving is fulfilled, do so
+            (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
+            while min_val_total > self.SAVE_DISTANCE_TOTAL and min_val_front > (self.SAVE_DISTANCE_FRONT - .5):
+                print("driving till turning")
+                print("no obstacle close (closest total one is at '{}', front '{}'), let's go!".format(
+                    round(min_val_total, 3), round(min_val_front, 3)))
+                print("current position ({},{})".format(round(self.msg_pose.position.x, 4),
+                                                        round(self.msg_pose.position.y, 4)))
+                self.publish_movement(self.CMD_LINEAR)
+                (compressed_total, compressed_front, min_val_total, min_val_front) = self.eval_laserdata()
 
     def print_memory(self):
         """
