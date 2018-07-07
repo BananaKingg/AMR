@@ -10,4 +10,4 @@ roslaunch ll-162143_maze maze_solver.launch
 
 ## Solution
 
-For info on the solution, please see [Wiki](https://fbe-gitlab.hs-weingarten.de/stud-amr-ws2017-master/ll-162143_tier4/wikis/home)
+For info on the solution, please see [Wiki](https://github.com/BananaKingg/AMR/wiki)
