@@ -1,4 +1,0 @@
-<launch>
-  <node pkg="maze" type="maze.py" name="maze_solver" output="screen">
-  </node>
-</launch>

@@ -1,5 +1,0 @@
-# Coordinates of the desired final position
-float64 x  # x-Coordinate
-float64 y  # y-Coordinate
----
-bool success    # Did it achieve it?
